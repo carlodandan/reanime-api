@@ -6,9 +6,9 @@ import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
-from fastapi.responses import StreamingResponse
 
-import httpx
+# Replaced httpx with curl_cffi
+from curl_cffi import requests
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -18,21 +18,24 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 HEADERS = {"User-Agent": _UA, "Accept": "application/json, */*"}
 _DECRYPT_MJS = str(Path(__file__).parent / "decrypt.mjs")
 
-_client: Optional[httpx.AsyncClient] = None
+# Changed type annotation to curl_cffi's AsyncSession
+_client: Optional[requests.AsyncSession] = None
 
 
 @asynccontextmanager
 async def lifespan(_app):
     global _client
-    _client = httpx.AsyncClient(
-        http2=True,
-        timeout=httpx.Timeout(20.0),
-        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+    # Initialized curl_cffi with Chrome browser impersonation to spoof TLS fingerprints
+    _client = requests.AsyncSession(
+        impersonate="chrome",
+        timeout=20.0,
         headers=HEADERS,
         follow_redirects=True,
     )
     yield
-    await _client.aclose()
+    # curl_cffi sessions do not strictly require an active async close sequence in lifespan, 
+    # but cleaning up global references ensures strict execution safety.
+    _client = None
 
 
 app = FastAPI(title="ReAnime Scraper", lifespan=lifespan)
@@ -40,10 +43,13 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 
 async def _get(path: str, params: dict = None, base: str = BASE) -> Any:
+    # curl_cffi handles params identically to httpx/requests
     r = await _client.get(f"{base}{path}", params=params)
     if r.status_code == 404:
         raise HTTPException(404, detail="Not found")
-    if not r.is_success:
+    
+    # curl_cffi uses .status_code checks instead of .is_success
+    if not (200 <= r.status_code < 300):
         raise HTTPException(r.status_code, detail=r.text[:300])
     return r.json()
 
@@ -80,7 +86,7 @@ async def _decrypt_embed(html: bytes) -> dict:
 
 async def get_stream_url(access_id: str, v: int = 2) -> dict:
     r = await _client.get(f"{FLIX}/e/{access_id}?v={v}", headers={**HEADERS, "Referer": f"{BASE}/"})
-    if not r.is_success:
+    if not (200 <= r.status_code < 300):
         raise HTTPException(r.status_code, detail=f"Embed fetch failed: {r.status_code}")
     return await _decrypt_embed(r.content)
 
@@ -206,36 +212,6 @@ async def stream_from_link(link: str = Query(...)):
 async def stream(access_id: str, v: int = Query(2, ge=1, le=2)):
     return await get_stream_url(access_id, v)
 
-@app.get("/stream/video")
-async def proxy_video_stream(url: str = Query(...)):
-    """
-    Proxies HLS stream assets (.m3u8 files and video segments) through 
-    the backend to bypass browser CORS restrictions.
-    """
-    try:
-        # We use a custom request to mimic a browser, preserving the Referer header 
-        # just in case Flixcloud checks for hotlinking.
-        req = _client.build_request("GET", url, headers={
-            **HEADERS, 
-            "Referer": f"{BASE}/"
-        })
-        resp = await _client.send(req, stream=True)
-        
-        if not resp.is_success:
-            raise HTTPException(resp.status_code, detail="Failed to fetch video stream source asset")
-
-        # Extract the content type (e.g., application/x-mpegURL or video/MP2T)
-        content_type = resp.headers.get("content-type", "application/octet-stream")
-
-        # Stream the bytes directly from Flixcloud back to your Vite frontend
-        return StreamingResponse(
-            resp.aiter_bytes(), 
-            status_code=resp.status_code, 
-            media_type=content_type
-        )
-        
-    except httpx.RequestError as exc:
-        raise HTTPException(502, detail=f"Network error trying to stream asset: {str(exc)}")
 
 @app.get("/thumbnails/{anilist_id}")
 async def thumbnails(anilist_id: int):
@@ -249,4 +225,4 @@ async def recommendations(slug: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("reanime:app", host="0.0.0.0", port=int(os.getenv("PORT", 8787)), workers=1, reload=False)
+    uvicorn.run("reanime:app", host="0.0.0.0", port=int(os.getenv("PORT", 8000)), workers=1, reload=False)
