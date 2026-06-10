@@ -83,6 +83,7 @@ async def _decrypt_embed(html: bytes) -> dict:
 
 
 async def get_stream_url(access_id: str, v: int = 2) -> dict:
+    # This works perfectly out of the box with curl_cffi
     r = await _client.get(f"{FLIX}/e/{access_id}?v={v}", headers={**HEADERS, "Referer": f"{BASE}/"})
     if not (200 <= r.status_code < 300):
         raise HTTPException(r.status_code, detail=f"Embed fetch failed: {r.status_code}")
