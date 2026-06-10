@@ -25,12 +25,20 @@ _client: Optional[requests.AsyncSession] = None
 @asynccontextmanager
 async def lifespan(_app):
     global _client
-    # Initialized curl_cffi with correct parameter names
+    
+    # Replace this string with your actual proxy credentials/URL
+    PROXY_URL = "https://aenime-r.webbase.workers.dev/url="
+    
     _client = requests.AsyncSession(
         impersonate="chrome",
         timeout=20.0,
         headers=HEADERS,
-        allow_redirects=True, # <--- Changed from follow_redirects
+        allow_redirects=True,
+        # This tells curl_cffi to route all scraped traffic through your proxy mask
+        proxies={
+            "http": PROXY_URL,
+            "https": PROXY_URL
+        }
     )
     yield
     _client = None
