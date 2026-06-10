@@ -25,16 +25,14 @@ _client: Optional[requests.AsyncSession] = None
 @asynccontextmanager
 async def lifespan(_app):
     global _client
-    # Initialized curl_cffi with Chrome browser impersonation to spoof TLS fingerprints
+    # Initialized curl_cffi with correct parameter names
     _client = requests.AsyncSession(
         impersonate="chrome",
         timeout=20.0,
         headers=HEADERS,
-        follow_redirects=True,
+        allow_redirects=True, # <--- Changed from follow_redirects
     )
     yield
-    # curl_cffi sessions do not strictly require an active async close sequence in lifespan, 
-    # but cleaning up global references ensures strict execution safety.
     _client = None
 
 
