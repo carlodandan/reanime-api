@@ -7,8 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Optional
 
-# Replaced httpx with curl_cffi
-from curl_cffi import requests
+import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -18,30 +17,21 @@ _UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like
 HEADERS = {"User-Agent": _UA, "Accept": "application/json, */*"}
 _DECRYPT_MJS = str(Path(__file__).parent / "decrypt.mjs")
 
-# Changed type annotation to curl_cffi's AsyncSession
-_client: Optional[requests.AsyncSession] = None
+_client: Optional[httpx.AsyncClient] = None
 
 
 @asynccontextmanager
 async def lifespan(_app):
     global _client
-    
-    # Replace this string with your actual proxy credentials/URL
-    PROXY_URL = "https://aenime-r.webbase.workers.dev/url="
-    
-    _client = requests.AsyncSession(
-        impersonate="chrome",
-        timeout=20.0,
+    _client = httpx.AsyncClient(
+        http2=True,
+        timeout=httpx.Timeout(20.0),
+        limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
         headers=HEADERS,
-        allow_redirects=True,
-        # This tells curl_cffi to route all scraped traffic through your proxy mask
-        proxies={
-            "http": PROXY_URL,
-            "https": PROXY_URL
-        }
+        follow_redirects=True,
     )
     yield
-    _client = None
+    await _client.aclose()
 
 
 app = FastAPI(title="ReAnime Scraper", lifespan=lifespan)
@@ -49,13 +39,10 @@ app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], all
 
 
 async def _get(path: str, params: dict = None, base: str = BASE) -> Any:
-    # curl_cffi handles params identically to httpx/requests
     r = await _client.get(f"{base}{path}", params=params)
     if r.status_code == 404:
         raise HTTPException(404, detail="Not found")
-    
-    # curl_cffi uses .status_code checks instead of .is_success
-    if not (200 <= r.status_code < 300):
+    if not r.is_success:
         raise HTTPException(r.status_code, detail=r.text[:300])
     return r.json()
 
@@ -91,9 +78,8 @@ async def _decrypt_embed(html: bytes) -> dict:
 
 
 async def get_stream_url(access_id: str, v: int = 2) -> dict:
-    # This works perfectly out of the box with curl_cffi
     r = await _client.get(f"{FLIX}/e/{access_id}?v={v}", headers={**HEADERS, "Referer": f"{BASE}/"})
-    if not (200 <= r.status_code < 300):
+    if not r.is_success:
         raise HTTPException(r.status_code, detail=f"Embed fetch failed: {r.status_code}")
     return await _decrypt_embed(r.content)
 
